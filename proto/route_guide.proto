@@ -1,9 +1,23 @@
 service RouteGuide {
   // Obtains the feature at a given position.
+  // Client requests -> Server gives simple resp
   rpc GetFeature(Point) returns (Feature) {}
+
   // Obtains the Features available within the given Rectangle.  Results are
   // streamed rather than returned at once (e.g. in a response message with a
   // repeated field), as the rectangle may cover a large area and contain a
   // huge number of features.
+  // Client requests -> Server gives stream
   rpc ListFeatures(Rectangle) returns (stream Feature) {}
+
+  // Client gives stream -> Server digests and returns
+  rpc RecordRoute(stream Point) returns (RouteSummary) {}
+
+  // bidir stream
+  rpc RouteChat(stream RouteNote) returns (stream RouteNote) {}
+}
+
+message Point {
+  int32 latitude = 1;
+  int32 longitude = 2;
 }
