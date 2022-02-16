@@ -5,7 +5,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use futures::{Stream, StreamExt};
-use futures_core::Stream;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Server;
@@ -29,8 +28,19 @@ pub struct RouteGuideService {
 
 // Main ex
 
-fn main() {
-    println!("Hello, world!");
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let addr = "[::1]:10000".parse().unwrap();
+
+    let route_guide = RouteGuideService {
+        features: Arc::new(data::load()),
+    };
+
+    let svc = RouteGuideServer::new(route_guide);
+
+    Server::builder().add_service(svc).serve(addr).await?;
+
+    Ok(())
 }
 
 // Impls
@@ -63,7 +73,7 @@ impl RouteGuide for RouteGuideService {
             }
         });
 
-        k(Response::new(ReceiverStream::new(rx)))
+        Ok(Response::new(ReceiverStream::new(rx)))
     }
 
     async fn record_route(
@@ -72,12 +82,24 @@ impl RouteGuide for RouteGuideService {
     ) -> Result<Response<RouteSummary>, Status> {
         let mut stream = request.into_inner();
 
-        let summary = RouteSummary::default();
+        let mut summary = RouteSummary::default();
         let mut last_point = None;
         let now = Instant::now();
 
         while let Some(point) = stream.next().await {
+            let point = point?;
             summary.point_count += 1;
+
+            for feature in &self.features[..] {
+                if feature.location.as_ref() == Some(&point) {
+                    summary.feature_count += 1;
+                }
+            }
+            if let Some(ref last_point) = last_point {
+                summary.distance += calc_distance(last_point, &point);
+            }
+
+            last_point = Some(point)
         }
 
         summary.elapsed_time = now.elapsed().as_secs() as i32;
@@ -89,9 +111,26 @@ impl RouteGuide for RouteGuideService {
 
     async fn route_chat(
         &self,
-        _request: Request<tonic::Streaming<RouteNote>>,
+        request: Request<tonic::Streaming<RouteNote>>,
     ) -> Result<Response<Self::RouteChatStream>, Status> {
-        unimplemented!()
+        let mut notes = HashMap::new();
+        let mut stream = request.into_inner();
+
+        let output = async_stream::try_stream! {
+            while let Some(note) = stream.next().await {
+                let note = note?;
+
+                let location = note.location.clone().unwrap();
+                let location_notes = notes.entry(location).or_insert(vec![]);
+                location_notes.push(note);
+
+                for note in location_notes {
+                    yield note.clone();
+                }
+            }
+        };
+
+        Ok(Response::new(Box::pin(output) as Self::RouteChatStream))
     }
 }
 
